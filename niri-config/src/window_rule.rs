@@ -5,6 +5,7 @@ use crate::appearance::{
     TabIndicatorRule,
 };
 use crate::layout::DefaultPresetSize;
+use crate::style::StyleRule;
 use crate::utils::{MergeWith, RegexEq};
 use crate::FloatOrInt;
 
@@ -79,6 +80,8 @@ pub struct WindowRule {
     pub background_effect: BackgroundEffectRule,
     #[knuffel(child, default)]
     pub popups: PopupsRule,
+    #[knuffel(child)]
+    pub style: Option<StyleRule>,
 }
 
 /// Rules for popup surfaces.
