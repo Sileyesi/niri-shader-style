@@ -1079,6 +1079,10 @@ impl<W: LayoutElement> Monitor<W> {
             .as_ref()
             .is_some_and(|s| s.is_animation_ongoing())
             || self.workspaces.iter().any(|ws| ws.are_animations_ongoing())
+            // Style shaders only need redraws while they're on screen.
+            || self
+                .workspaces_with_render_geo()
+                .any(|(ws, _geo)| ws.are_style_animations_ongoing())
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {

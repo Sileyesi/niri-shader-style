@@ -1,4 +1,5 @@
 use core::f64;
+use std::cell::Cell;
 use std::rc::Rc;
 
 use niri_config::utils::MergeWith as _;
@@ -28,6 +29,7 @@ use crate::render_helpers::resize::ResizeRenderElement;
 use crate::render_helpers::shadow::ShadowRenderElement;
 use crate::render_helpers::snapshot::RenderSnapshot;
 use crate::render_helpers::solid_color::{SolidColorBuffer, SolidColorRenderElement};
+use crate::render_helpers::style::{self, BuiltinValues, StyleRenderElement};
 use crate::render_helpers::xray::{Xray, XrayPos};
 use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::transaction::Transaction;
@@ -49,6 +51,20 @@ pub struct Tile<W: LayoutElement> {
 
     /// The shadow around the window.
     shadow: Shadow,
+
+    /// The shader style drawn around and behind the window, if it has one.
+    ///
+    /// When the style draws successfully, it replaces the border, focus ring and shadow.
+    style: Option<StyleRenderElement>,
+
+    /// Whether the style shader needs to be redrawn continuously, because it uses `u_time`.
+    style_animated: bool,
+
+    /// Whether the tile is within its view, as of the last `update_render_elements()`.
+    style_visible: bool,
+
+    /// Whether the style shader failed to compile at the last render.
+    style_failed: Cell<bool>,
 
     /// This tile's current sizing mode.
     ///
@@ -133,6 +149,7 @@ niri_render_elements! {
         Offscreen = OffscreenRenderElement,
         ExtraDamage = ExtraDamage,
         BackgroundEffect = BackgroundEffectElement,
+        Style = StyleRenderElement,
     }
 }
 
@@ -193,6 +210,10 @@ impl<W: LayoutElement> Tile<W> {
             border: FocusRing::new(border_config.into()),
             focus_ring: FocusRing::new(focus_ring_config),
             shadow: Shadow::new(shadow_config),
+            style: None,
+            style_animated: false,
+            style_visible: false,
+            style_failed: Cell::new(false),
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.]),
             restore_to_floating: false,
@@ -445,6 +466,13 @@ impl<W: LayoutElement> Tile<W> {
         self.are_transitions_ongoing() || self.window.rules().baba_is_float == Some(true)
     }
 
+    /// Returns whether the style shader needs continuous redraws.
+    ///
+    /// Tiles outside of their view don't, since they aren't drawn.
+    pub fn are_style_animations_ongoing(&self) -> bool {
+        self.style_animated && self.style_visible && !self.style_failed.get()
+    }
+
     pub fn are_transitions_ongoing(&self) -> bool {
         self.open_animation.is_some()
             || self.resize_animation.is_some()
@@ -537,6 +565,76 @@ impl<W: LayoutElement> Tile<W> {
         );
 
         self.fullscreen_backdrop.resize(animated_tile_size);
+
+        self.update_style(is_active, view_rect, expanded_progress);
+    }
+
+    fn update_style(
+        &mut self,
+        is_active: bool,
+        view_rect: Rectangle<f64, Logical>,
+        expanded_progress: f64,
+    ) {
+        let style = self.window.rules().style.as_ref();
+        let shader = style.and_then(|style| style.shader.as_ref());
+
+        // The error of reading the shader has been logged at config load.
+        let (Some(style), Some(shader), true) = (
+            style,
+            shader,
+            shader.is_some_and(|shader| shader.source.is_ok()),
+        ) else {
+            self.style = None;
+            self.style_animated = false;
+            self.style_visible = false;
+            self.style_failed.set(false);
+            return;
+        };
+
+        // The shader draws around the tile too.
+        let margin = Point::from((style.margin, style.margin));
+        let mut draw_rect = Rectangle::from_size(self.animated_tile_size());
+        draw_rect.loc -= margin;
+        draw_rect.size += margin.to_size().upscale(2.);
+
+        self.style_visible = draw_rect.intersection(view_rect).is_some();
+        self.style_animated = shader.animated;
+
+        // Don't bother updating (and damaging) what isn't on screen.
+        if !self.style_visible {
+            return;
+        }
+
+        if expanded_progress >= 1. {
+            // Like the border and shadow, hide when maximized or fullscreen.
+            self.style = None;
+            return;
+        }
+
+        let size = self.animated_window_size();
+        let radius = self
+            .window
+            .geometry_corner_radius()
+            .scaled_by(1. - expanded_progress as f32)
+            .fit_to(size.w as f32, size.h as f32);
+        let values = BuiltinValues {
+            // Only animated shaders get new values every frame, so others don't cause damage.
+            time: if shader.animated {
+                style::time_uniform(self.clock.now())
+            } else {
+                0.
+            },
+            size,
+            pos: Point::from((-view_rect.loc.x, -view_rect.loc.y)) + self.window_loc(),
+            focused: is_active,
+            radius,
+        };
+
+        let scale = self.scale as f32;
+        let alpha = 1. - expanded_progress as f32;
+        self.style
+            .get_or_insert_with(StyleRenderElement::new)
+            .update(style, &values, scale, alpha);
     }
 
     pub fn scale(&self) -> f64 {
@@ -1279,7 +1377,19 @@ impl<W: LayoutElement> Tile<W> {
             }
         }
 
-        if let Some(width) = self.visual_border_width() {
+        // The style shader replaces the border, focus ring and shadow, if it's usable.
+        let mut style_pushed = false;
+        if let (Some(elem), Some(style)) = (&self.style, &rules.style) {
+            if style::ensure_program(ctx.renderer.as_gles_renderer(), style) {
+                let margin = elem.margin();
+                let loc = window_render_loc - Point::from((margin, margin));
+                push(elem.clone().with_location(loc).into());
+                style_pushed = true;
+            }
+            self.style_failed.set(!style_pushed);
+        }
+
+        if let Some(width) = self.visual_border_width().filter(|_| !style_pushed) {
             self.border.render(
                 ctx.renderer,
                 location + Point::from((width, width)),
@@ -1291,12 +1401,12 @@ impl<W: LayoutElement> Tile<W> {
         // being outside the monitor or obscured by a solid colored bar, but it is visible under
         // semitransparent bars in maximized state (which is a bit weird) and in the overview (also
         // a bit weird).
-        if focus_ring && expanded_progress < 1. {
+        if focus_ring && expanded_progress < 1. && !style_pushed {
             self.focus_ring
                 .render(ctx.renderer, location, &mut |elem| push(elem.into()));
         }
 
-        if expanded_progress < 1. {
+        if expanded_progress < 1. && !style_pushed {
             self.shadow
                 .render(ctx.renderer, location, &mut |elem| push(elem.into()));
         }

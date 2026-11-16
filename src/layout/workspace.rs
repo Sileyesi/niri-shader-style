@@ -371,6 +371,11 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_animations_ongoing() || self.floating.are_animations_ongoing()
     }
 
+    pub fn are_style_animations_ongoing(&self) -> bool {
+        self.scrolling.are_style_animations_ongoing()
+            || self.floating.are_style_animations_ongoing()
+    }
+
     pub fn are_transitions_ongoing(&self) -> bool {
         self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
     }

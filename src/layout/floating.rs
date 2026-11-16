@@ -261,6 +261,10 @@ impl<W: LayoutElement> FloatingSpace<W> {
         self.tiles.iter().any(Tile::are_animations_ongoing) || !self.closing_windows.is_empty()
     }
 
+    pub fn are_style_animations_ongoing(&self) -> bool {
+        self.tiles.iter().any(Tile::are_style_animations_ongoing)
+    }
+
     pub fn are_transitions_ongoing(&self) -> bool {
         self.tiles.iter().any(Tile::are_transitions_ongoing) || !self.closing_windows.is_empty()
     }

@@ -35,3 +35,31 @@ vec4 u_palette(int i) {
         return u_palette_2;
     return u_palette_3;
 }
+
+// Premultiplies a straight alpha color, which is what `style_color()` should return.
+vec4 u_premul(vec4 color) {
+    return vec4(color.rgb * color.a, color.a);
+}
+
+// Signed distance from `px` to the rounded edge of the window geometry, in logical pixels.
+//
+// Negative inside the window, positive outside. `px` is relative to the window's top-left corner,
+// like in `style_color()`.
+float u_window_sdf(vec2 px) {
+    vec2 center = px - u_size * 0.5;
+
+    // Pick the corner radius of the quadrant that `px` is in.
+    float radius;
+    if (center.x < 0.0)
+        radius = center.y < 0.0 ? u_radius.x : u_radius.w;
+    else
+        radius = center.y < 0.0 ? u_radius.y : u_radius.z;
+
+    vec2 q = abs(center) - u_size * 0.5 + radius;
+    return min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - radius;
+}
+
+// Draws premultiplied color `top` over premultiplied color `bottom`.
+vec4 u_over(vec4 top, vec4 bottom) {
+    return top + bottom * (1.0 - top.a);
+}

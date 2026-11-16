@@ -223,6 +223,10 @@ impl ShaderRenderElement {
         self.commit_counter.increment();
     }
 
+    pub fn set_program(&mut self, program: ProgramType) {
+        self.program = program;
+    }
+
     pub fn update(
         &mut self,
         size: Size<f64, Logical>,
@@ -431,13 +435,14 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
                 }
 
                 for uniform in &*self.additional_uniforms {
-                    let desc =
-                        program
-                            .additional_uniforms
-                            .get(&*uniform.name)
-                            .ok_or_else(|| {
-                                GlesError::UnknownUniform(uniform.name.clone().into_owned())
-                            })?;
+                    let Some(desc) = program.additional_uniforms.get(&*uniform.name) else {
+                        // Style shaders only declare the params they use.
+                        if matches!(self.program, ProgramType::Style(_)) {
+                            continue;
+                        }
+
+                        return Err(GlesError::UnknownUniform(uniform.name.clone().into_owned()));
+                    };
                     uniform.value.set(gl, desc)?;
                 }
 
