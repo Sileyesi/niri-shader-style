@@ -3656,6 +3656,31 @@ impl Niri {
     }
 
     /// Schedules an immediate redraw on all outputs if one is not already scheduled.
+    /// Tells the window under the pointer where the pointer is, for the style shaders.
+    fn update_style_pointer(&mut self) {
+        self.layout.with_windows(|mapped, _output, _ws, _layout| {
+            mapped.set_pointer_position(None);
+        });
+
+        if !self.pointer_visibility.is_visible() {
+            return;
+        }
+
+        let pos = self.seat.get_pointer().unwrap().current_location();
+        let Some((output, pos_within_output)) = self.output_under(pos) else {
+            return;
+        };
+        let Some((mapped, HitType::Input { win_pos })) =
+            self.layout.window_under(output, pos_within_output)
+        else {
+            return;
+        };
+
+        // win_pos is the buffer position, and the style wants it relative to the geometry.
+        let pos_in_window = pos_within_output - win_pos + mapped.buf_loc().to_f64();
+        mapped.set_pointer_position(Some(pos_in_window));
+    }
+
     pub fn queue_redraw_all(&mut self) {
         for state in self.output_state.values_mut() {
             state.redraw_state = mem::take(&mut state.redraw_state).queue_redraw();
@@ -4069,6 +4094,7 @@ impl Niri {
 
     pub fn update_render_elements(&mut self, output: Option<&Output>) {
         self.update_xray_render_elements(output);
+        self.update_style_pointer();
         self.layout.update_render_elements(output);
 
         for (out, state) in self.output_state.iter_mut() {

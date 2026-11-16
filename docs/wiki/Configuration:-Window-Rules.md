@@ -1062,6 +1062,8 @@ Uniforms available to the shader:
 | `vec2 u_size` | Window size. |
 | `vec2 u_pos` | Window position in the workspace view. |
 | `float u_focused` | `1.0` for the active window, `0.0` otherwise. |
+| `vec2 u_pointer` | Pointer position relative to the window's top-left corner, like `px`. Keeps the last position after the pointer leaves. |
+| `float u_pointer_amount` | `1.0` while the pointer is over the window, `0.0` when it isn't, eased over a short time. |
 | `vec4 u_radius` | Corner radii: top-left, top-right, bottom-right, bottom-left. |
 | `u_palette(int i)` | Palette color, `U_PRIMARY`, `U_SECONDARY`, `U_ACCENT` or `U_BACKGROUND`. Straight alpha. |
 | `float u_window_sdf(vec2 px)` | Signed distance to the window's rounded edge: negative inside, positive outside. |

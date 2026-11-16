@@ -140,6 +140,11 @@ pub trait LayoutElement {
         let _ = blur_config;
     }
 
+    /// Returns the pointer position relative to the element's visual geometry, if it's over it.
+    fn pointer_position(&self) -> Option<Point<f64, Logical>> {
+        None
+    }
+
     /// Visual size of the element.
     ///
     /// This is what the user would consider the size, i.e. excluding CSD shadows and whatnot.

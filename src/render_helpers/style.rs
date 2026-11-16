@@ -41,12 +41,14 @@ pub const PRELUDE: &str = include_str!("shaders/style_prelude.frag");
 const EPILOGUE: &str = include_str!("shaders/style_epilogue.frag");
 
 /// Names and types of the built-in uniforms, in the same order as in the prelude.
-const BUILTIN: [(&str, UniformType); 9] = [
+const BUILTIN: [(&str, UniformType); 11] = [
     ("u_time", UniformType::_1f),
     ("u_size", UniformType::_2f),
     ("u_pos", UniformType::_2f),
     ("u_focused", UniformType::_1f),
     ("u_radius", UniformType::_4f),
+    ("u_pointer", UniformType::_2f),
+    ("u_pointer_amount", UniformType::_1f),
     ("u_palette_0", UniformType::_4f),
     ("u_palette_1", UniformType::_4f),
     ("u_palette_2", UniformType::_4f),
@@ -73,6 +75,10 @@ pub struct BuiltinValues {
     pub pos: Point<f64, Logical>,
     pub focused: bool,
     pub radius: CornerRadius,
+    /// Position of the pointer relative to the window geometry, which stays after it leaves.
+    pub pointer: Point<f64, Logical>,
+    /// How much the pointer is over the window, from 0 to 1.
+    pub pointer_amount: f32,
 }
 
 /// Programs of the style shaders, compiled on demand.
@@ -227,6 +233,11 @@ pub fn uniforms(style: &Style, values: &BuiltinValues) -> Vec<Uniform<'static>> 
         Uniform::new("u_pos", [values.pos.x as f32, values.pos.y as f32]),
         Uniform::new("u_focused", if values.focused { 1f32 } else { 0f32 }),
         Uniform::new("u_radius", <[f32; 4]>::from(values.radius)),
+        Uniform::new(
+            "u_pointer",
+            [values.pointer.x as f32, values.pointer.y as f32],
+        ),
+        Uniform::new("u_pointer_amount", values.pointer_amount),
         Uniform::new("u_palette_0", color(palette.primary)),
         Uniform::new("u_palette_1", color(palette.secondary)),
         Uniform::new("u_palette_2", color(palette.accent)),
@@ -320,6 +331,8 @@ struct Parameters {
     pos: Point<f64, Logical>,
     focused: bool,
     radius: CornerRadius,
+    pointer: Point<f64, Logical>,
+    pointer_amount: f32,
     palette: Palette,
     params: BTreeMap<String, f64>,
     // Should only be used for visual improvements, i.e. corner radius anti-aliasing.
@@ -360,6 +373,8 @@ impl StyleRenderElement {
             pos: values.pos,
             focused: values.focused,
             radius: values.radius,
+            pointer: values.pointer,
+            pointer_amount: values.pointer_amount,
             palette: style.palette,
             params: style.params.clone(),
             scale,
@@ -690,6 +705,8 @@ mod tests {
             pos: Point::from((10., 20.)),
             focused: true,
             radius: CornerRadius::default(),
+            pointer: Point::from((5., 6.)),
+            pointer_amount: 1.,
         };
 
         let registered: Vec<_> = uniform_names(&declared)

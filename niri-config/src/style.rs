@@ -73,6 +73,8 @@ pub struct ShaderFile {
     pub animated: bool,
     /// Whether the shader samples what is behind the window, with `u_backdrop`.
     pub uses_backdrop: bool,
+    /// Whether the shader uses the pointer position, `u_pointer` or `u_pointer_amount`.
+    pub uses_pointer: bool,
 }
 
 /// Style with all matching window rules applied.
@@ -194,6 +196,7 @@ impl ShaderFile {
 
         let animated = source.as_deref().is_ok_and(is_animated);
         let uses_backdrop = source.as_deref().is_ok_and(uses_backdrop);
+        let uses_pointer = source.as_deref().is_ok_and(uses_pointer);
 
         Self {
             path,
@@ -202,6 +205,7 @@ impl ShaderFile {
             key,
             animated,
             uses_backdrop,
+            uses_pointer,
         }
     }
 
@@ -340,6 +344,11 @@ pub fn uses_backdrop(source: &str) -> bool {
     strip_comments(source).contains("u_backdrop")
 }
 
+/// Returns whether the shader refers to `u_pointer` or `u_pointer_amount`.
+pub fn uses_pointer(source: &str) -> bool {
+    strip_comments(source).contains("u_pointer")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -419,6 +428,14 @@ mod tests {
         assert!(uses_backdrop("texture2D(u_backdrop, uv)"));
         assert!(!uses_backdrop("// u_backdrop_at is not used\nvec4 c;"));
         assert!(!uses_backdrop(""));
+    }
+
+    #[test]
+    fn detects_pointer_use() {
+        assert!(uses_pointer("float d = length(px - u_pointer);"));
+        assert!(uses_pointer("x * u_pointer_amount"));
+        assert!(!uses_pointer("// u_pointer is not used\nfloat d;"));
+        assert!(!uses_pointer(""));
     }
 
     #[test]

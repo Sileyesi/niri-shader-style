@@ -14,6 +14,11 @@ uniform float u_focused;
 // Corner radii of the window geometry in logical pixels: top-left, top-right, bottom-right,
 // bottom-left.
 uniform vec4 u_radius;
+// Position of the pointer relative to the window's top-left corner, in logical pixels, like `px` in
+// `style_color()`. Keeps the last position after the pointer leaves the window.
+uniform vec2 u_pointer;
+// 1.0 while the pointer is over the window, 0.0 when it isn't, eased over a short time.
+uniform float u_pointer_amount;
 
 // Palette colors, straight (not premultiplied) alpha. Use `u_palette(i)` to index them.
 uniform vec4 u_palette_0;

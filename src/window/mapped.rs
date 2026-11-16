@@ -85,6 +85,11 @@ pub struct Mapped {
     /// If `None`, then the window is not offscreened.
     offscreen_data: RefCell<Option<OffscreenData>>,
 
+    /// Pointer position relative to the window geometry, if it's over the window.
+    ///
+    /// Set before rendering for the window styles.
+    pointer_position: Cell<Option<Point<f64, Logical>>>,
+
     /// Whether this has an urgent indicator.
     is_urgent: bool,
 
@@ -285,6 +290,7 @@ impl Mapped {
             needs_configure: false,
             needs_frame_callback: false,
             offscreen_data: RefCell::new(None),
+            pointer_position: Cell::new(None),
             is_urgent: false,
             is_focused: false,
             is_active_in_column: true,
@@ -361,6 +367,10 @@ impl Mapped {
 
     pub fn credentials(&self) -> Option<&Credentials> {
         self.credentials.as_ref()
+    }
+
+    pub fn set_pointer_position(&self, pos: Option<Point<f64, Logical>>) {
+        self.pointer_position.set(pos);
     }
 
     pub fn offscreen_data(&self) -> Ref<'_, Option<OffscreenData>> {
@@ -636,6 +646,10 @@ impl LayoutElement for Mapped {
 
     fn buf_loc(&self) -> Point<i32, Logical> {
         Point::from((0, 0)) - self.window.geometry().loc
+    }
+
+    fn pointer_position(&self) -> Option<Point<f64, Logical>> {
+        self.pointer_position.get()
     }
 
     fn is_in_input_region(&self, point: Point<f64, Logical>) -> bool {

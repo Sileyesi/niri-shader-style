@@ -1,6 +1,7 @@
 use core::f64;
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use niri_config::utils::MergeWith as _;
 use niri_config::{Color, CornerRadius, GradientInterpolation};
@@ -65,6 +66,9 @@ pub struct Tile<W: LayoutElement> {
 
     /// Whether the style shader failed to compile at the last render.
     style_failed: Cell<bool>,
+
+    /// Pointer over the window, for the style shader.
+    pointer: PointerEase,
 
     /// This tile's current sizing mode.
     ///
@@ -191,6 +195,52 @@ pub(super) struct AlphaAnimation {
     offscreen: OffscreenBuffer,
 }
 
+/// Pointer position over a window, with the amount eased for the style shader.
+#[derive(Debug, Default)]
+struct PointerEase {
+    /// Last pointer position over the window, relative to its geometry.
+    pos: Point<f64, Logical>,
+    /// How much the pointer is over the window, eased from 0 to 1.
+    amount: f32,
+    /// When `amount` was last updated.
+    time: Duration,
+    /// Whether `amount` is still moving toward its target.
+    transition: bool,
+}
+
+impl PointerEase {
+    /// Eases the amount toward whether the pointer is over the window.
+    ///
+    /// Returns the last pointer position and the amount.
+    fn update(
+        &mut self,
+        pointer: Option<Point<f64, Logical>>,
+        now: Duration,
+    ) -> (Point<f64, Logical>, f32) {
+        /// Time constant of the easing, in seconds.
+        const EASE_SECS: f32 = 0.12;
+
+        let target = match pointer {
+            Some(pos) => {
+                self.pos = pos;
+                1.
+            }
+            None => 0.,
+        };
+
+        let dt = now.saturating_sub(self.time).as_secs_f32().min(0.1);
+        self.time = now;
+
+        self.amount += (target - self.amount) * (1. - (-dt / EASE_SECS).exp());
+        if (target - self.amount).abs() < 0.005 {
+            self.amount = target;
+        }
+        self.transition = self.amount != target;
+
+        (self.pos, self.amount)
+    }
+}
+
 impl<W: LayoutElement> Tile<W> {
     pub fn new(
         window: W,
@@ -214,6 +264,7 @@ impl<W: LayoutElement> Tile<W> {
             style_animated: false,
             style_visible: false,
             style_failed: Cell::new(false),
+            pointer: PointerEase::default(),
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.]),
             restore_to_floating: false,
@@ -470,7 +521,9 @@ impl<W: LayoutElement> Tile<W> {
     ///
     /// Tiles outside of their view don't, since they aren't drawn.
     pub fn are_style_animations_ongoing(&self) -> bool {
-        self.style_animated && self.style_visible && !self.style_failed.get()
+        (self.style_animated || self.pointer.transition)
+            && self.style_visible
+            && !self.style_failed.get()
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
@@ -588,6 +641,7 @@ impl<W: LayoutElement> Tile<W> {
             self.style_animated = false;
             self.style_visible = false;
             self.style_failed.set(false);
+            self.pointer.transition = false;
             return;
         };
 
@@ -611,6 +665,14 @@ impl<W: LayoutElement> Tile<W> {
             return;
         }
 
+        let (pointer, pointer_amount) = if shader.uses_pointer {
+            let target = self.window.pointer_position();
+            self.pointer.update(target, self.clock.now())
+        } else {
+            self.pointer.transition = false;
+            (Point::from((0., 0.)), 0.)
+        };
+
         let size = self.animated_window_size();
         let radius = self
             .window
@@ -628,6 +690,8 @@ impl<W: LayoutElement> Tile<W> {
             pos: Point::from((-view_rect.loc.x, -view_rect.loc.y)) + self.window_loc(),
             focused: is_active,
             radius,
+            pointer,
+            pointer_amount,
         };
 
         let scale = self.scale as f32;
