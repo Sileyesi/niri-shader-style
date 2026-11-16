@@ -63,3 +63,12 @@ float u_window_sdf(vec2 px) {
 vec4 u_over(vec4 top, vec4 bottom) {
     return top + bottom * (1.0 - top.a);
 }
+
+// Color of what is behind the window at `px`, relative to the window's top-left corner, like in
+// `style_color()`. Straight alpha. Points outside of the drawn area get the nearest edge color.
+//
+// A shader that uses this gets the backdrop captured every frame, which costs some performance.
+vec4 u_backdrop_at(vec2 px) {
+    vec3 uv = niri_backdrop_matrix * vec3(px + niri_origin, 1.0);
+    return texture2D(u_backdrop, clamp(uv.xy, 0.001, 0.999));
+}

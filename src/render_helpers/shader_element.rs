@@ -290,15 +290,16 @@ impl Element for ShaderRenderElement {
     }
 }
 
-impl RenderElement<GlesRenderer> for ShaderRenderElement {
-    fn draw(
+impl ShaderRenderElement {
+    /// Draws the element with extra uniforms and textures that are only known at draw time.
+    pub fn draw_with(
         &self,
         frame: &mut GlesFrame<'_, '_>,
         src: Rectangle<f64, Buffer>,
         dest: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
-        _opaque_regions: &[Rectangle<i32, Physical>],
-        _cache: Option<&UserDataMap>,
+        extra_uniforms: &[Uniform<'_>],
+        extra_textures: &HashMap<String, GlesTexture>,
     ) -> Result<(), GlesError> {
         let _span = tracy_client::span!("ShaderRenderElement::draw");
 
@@ -312,6 +313,9 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
             return Ok(());
         };
         let mut resources = resources.borrow_mut();
+
+        let textures: HashMap<&String, &GlesTexture> =
+            self.textures.iter().chain(extra_textures.iter()).collect();
 
         let supports_instancing = frame.capabilities().contains(&Capability::Instancing);
 
@@ -390,7 +394,7 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
             };
 
             unsafe {
-                for (i, texture) in self.textures.values().enumerate() {
+                for (i, texture) in textures.values().copied().enumerate() {
                     gl.ActiveTexture(ffi::TEXTURE0 + i as u32);
                     gl.BindTexture(ffi::TEXTURE_2D, texture.tex_id());
                     gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
@@ -409,8 +413,8 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
 
                 gl.UseProgram(program.program);
 
-                for (i, name) in self.textures.keys().enumerate() {
-                    gl.Uniform1i(program.texture_uniforms[name], i as i32);
+                for (i, name) in textures.keys().copied().enumerate() {
+                    gl.Uniform1i(program.texture_uniforms[name.as_str()], i as i32);
                 }
 
                 gl.UniformMatrix3fv(
@@ -434,7 +438,7 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
                     gl.Uniform1f(shader.0.uniform_tint, tint);
                 }
 
-                for uniform in &*self.additional_uniforms {
+                for uniform in self.additional_uniforms.iter().chain(extra_uniforms) {
                     let Some(desc) = program.additional_uniforms.get(&*uniform.name) else {
                         // Style shaders only declare the params they use.
                         if matches!(self.program, ProgramType::Style(_)) {
@@ -517,6 +521,20 @@ impl RenderElement<GlesRenderer> for ShaderRenderElement {
         })??;
 
         Ok(())
+    }
+}
+
+impl RenderElement<GlesRenderer> for ShaderRenderElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dest: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+        _cache: Option<&UserDataMap>,
+    ) -> Result<(), GlesError> {
+        self.draw_with(frame, src, dest, damage, &[], &HashMap::new())
     }
 
     fn underlying_storage(&self, _renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {

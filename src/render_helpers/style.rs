@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
+use glam::{Mat3, Vec2};
 use niri_config::style::strip_comments;
 use niri_config::{CornerRadius, Palette, Style};
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
@@ -20,13 +21,16 @@ use smithay::backend::renderer::gles::{
     GlesError, GlesFrame, GlesRenderer, Uniform, UniformName, UniformType,
 };
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+use smithay::backend::renderer::Frame as _;
 use smithay::gpu_span_location;
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
+use super::background_effect::RenderParams;
+use super::framebuffer_effect::{FramebufferEffect, FramebufferEffectElement};
 use super::renderer::AsGlesFrame as _;
 use super::shader_element::{ShaderProgram, ShaderRenderElement};
-use super::shaders::{ProgramType, Shaders};
+use super::shaders::{mat3_uniform, ProgramType, Shaders};
 use crate::backend::tty::{TtyFrame, TtyRenderer, TtyRendererError};
 
 /// Declarations that every style shader starts with.
@@ -51,6 +55,9 @@ const BUILTIN: [(&str, UniformType); 9] = [
 
 /// Uniforms that niri sets for its own use, declared in the header.
 const INTERNAL: [(&str, UniformType); 1] = [("niri_origin", UniformType::_2f)];
+
+/// Uniform that is only set when drawing, because it depends on how the backdrop was captured.
+const BACKDROP_MATRIX: (&str, UniformType) = ("niri_backdrop_matrix", UniformType::Matrix3x3);
 
 /// Seconds after which `u_time` wraps around, to keep it precise as a `float`.
 const TIME_WRAP_SECS: f64 = 3600.;
@@ -187,12 +194,17 @@ fn compile(
     program.push_str(source);
     program.push_str(EPILOGUE);
 
-    ShaderProgram::compile(renderer, &program, &uniform_names(user_params), &[])
+    ShaderProgram::compile(
+        renderer,
+        &program,
+        &uniform_names(user_params),
+        &["u_backdrop"],
+    )
 }
 
 /// Uniform names to register when compiling a style shader with the given user parameters.
 pub fn uniform_names(user_params: &[String]) -> Vec<UniformName<'static>> {
-    let builtin = BUILTIN.iter().chain(&INTERNAL);
+    let builtin = BUILTIN.iter().chain(&INTERNAL).chain([&BACKDROP_MATRIX]);
     let builtin = builtin.map(|&(name, type_)| UniformName::new(name, type_));
     let user = user_params
         .iter()
@@ -292,11 +304,16 @@ fn is_identifier(s: &str) -> bool {
 pub struct StyleRenderElement {
     inner: ShaderRenderElement,
     params: Option<Parameters>,
+    /// Size of the drawn area, which is also the size of the element's source.
+    area_size: Size<f64, Logical>,
+    scale: f32,
+    uses_backdrop: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct Parameters {
     key: u64,
+    uses_backdrop: bool,
     margin: f64,
     time: f32,
     size: Size<f64, Logical>,
@@ -315,6 +332,9 @@ impl StyleRenderElement {
         Self {
             inner: ShaderRenderElement::empty(ProgramType::Style(0), Kind::Unspecified),
             params: None,
+            area_size: Size::default(),
+            scale: 1.,
+            uses_backdrop: false,
         }
     }
 
@@ -333,6 +353,7 @@ impl StyleRenderElement {
 
         let params = Parameters {
             key: shader.key,
+            uses_backdrop: shader.uses_backdrop,
             margin: style.margin,
             time: values.time,
             size: values.size,
@@ -360,6 +381,9 @@ impl StyleRenderElement {
             HashMap::new(),
         );
         self.params = Some(params);
+        self.area_size = size;
+        self.scale = scale;
+        self.uses_backdrop = shader.uses_backdrop;
     }
 
     /// Margin of the area that the element draws around the window geometry.
@@ -397,7 +421,9 @@ impl Element for StyleRenderElement {
     }
 
     fn src(&self) -> Rectangle<f64, Buffer> {
-        self.inner.src()
+        // The source is the size in logical pixels, so that the shader gets logical pixel
+        // coordinates, and so that capturing the framebuffer gets the right size.
+        Rectangle::from_size(self.area_size.to_buffer(1., Transform::Normal))
     }
 
     fn damage_since(
@@ -419,9 +445,61 @@ impl Element for StyleRenderElement {
     fn kind(&self) -> Kind {
         self.inner.kind()
     }
+
+    fn is_framebuffer_effect(&self) -> bool {
+        self.uses_backdrop
+    }
+}
+
+impl StyleRenderElement {
+    /// Matrix from the coordinates in the element to the captured backdrop texture.
+    fn backdrop_matrix(
+        frame: &GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+    ) -> Option<Mat3> {
+        // The capture is clamped to the framebuffer, see FramebufferEffectElement.
+        let output_rect = Rectangle::from_size(frame.output_size());
+        let clamped = dst.intersection(output_rect)?;
+        let clamp_offset = clamped.loc - dst.loc;
+
+        // Logical pixels per physical pixel.
+        let k = Vec2::new(
+            (src.size.w / f64::from(dst.size.w)) as f32,
+            (src.size.h / f64::from(dst.size.h)) as f32,
+        );
+        let origin = Vec2::new(src.loc.x as f32, src.loc.y as f32)
+            + Vec2::new(clamp_offset.x as f32, clamp_offset.y as f32) * k;
+        let region = Vec2::new(clamped.size.w as f32, clamped.size.h as f32) * k;
+        let to_unit = Mat3::from_scale(Vec2::ONE / region) * Mat3::from_translation(-origin);
+
+        // The texture has the contents of the framebuffer, which has the output transform.
+        let transform = Mat3::from_translation(Vec2::new(0.5, 0.5))
+            * Mat3::from_cols_array(frame.transformation().matrix().as_ref())
+            * Mat3::from_translation(Vec2::new(-0.5, -0.5));
+
+        Some(transform * to_unit)
+    }
 }
 
 impl RenderElement<GlesRenderer> for StyleRenderElement {
+    fn capture_framebuffer(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), GlesError> {
+        let params = RenderParams {
+            geometry: Rectangle::from_size(self.area_size),
+            subregion: None,
+            clip: None,
+            scale: f64::from(self.scale),
+        };
+        let capture = FramebufferEffect::new().render(None, params, None, 0., 1.);
+        RenderElement::<GlesRenderer>::capture_framebuffer(&capture, frame, src, dst, cache)
+    }
+
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -433,15 +511,31 @@ impl RenderElement<GlesRenderer> for StyleRenderElement {
     ) -> Result<(), GlesError> {
         let _span = tracy_client::span!("StyleRenderElement::draw");
         frame.with_gpu_span(gpu_span_location!("StyleRenderElement::draw"), |frame| {
-            RenderElement::<GlesRenderer>::draw(
-                &self.inner,
-                frame,
-                src,
-                dst,
-                damage,
-                opaque_regions,
-                cache,
-            )
+            if !self.uses_backdrop {
+                return RenderElement::<GlesRenderer>::draw(
+                    &self.inner,
+                    frame,
+                    src,
+                    dst,
+                    damage,
+                    opaque_regions,
+                    cache,
+                );
+            }
+
+            // The backdrop can be missing, for example when rendering to an offscreen buffer for
+            // an animation. We can't draw a shader that needs it then.
+            let Some(texture) = cache.and_then(FramebufferEffectElement::captured_texture) else {
+                return Ok(());
+            };
+            let Some(matrix) = Self::backdrop_matrix(frame, src, dst) else {
+                return Ok(());
+            };
+
+            let uniform = mat3_uniform(BACKDROP_MATRIX.0, matrix);
+            let textures = HashMap::from([("u_backdrop".to_owned(), texture)]);
+            self.inner
+                .draw_with(frame, src, dst, damage, &[uniform], &textures)
         })
     }
 
@@ -451,6 +545,18 @@ impl RenderElement<GlesRenderer> for StyleRenderElement {
 }
 
 impl<'render> RenderElement<TtyRenderer<'render>> for StyleRenderElement {
+    fn capture_framebuffer(
+        &self,
+        frame: &mut TtyFrame<'_, '_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &UserDataMap,
+    ) -> Result<(), TtyRendererError<'render>> {
+        let frame = frame.as_gles_frame();
+        RenderElement::<GlesRenderer>::capture_framebuffer(self, frame, src, dst, cache)?;
+        Ok(())
+    }
+
     fn draw(
         &self,
         frame: &mut TtyFrame<'_, '_, '_>,
@@ -507,9 +613,10 @@ mod tests {
 
     #[test]
     fn internal_uniforms_match_header() {
-        for (name, type_) in INTERNAL {
+        for (name, type_) in INTERNAL.into_iter().chain([BACKDROP_MATRIX]) {
             let decl = match type_ {
                 UniformType::_2f => format!("uniform vec2 {name};"),
+                UniformType::Matrix3x3 => format!("uniform mat3 {name};"),
                 _ => unreachable!(),
             };
             assert!(HEADER.contains(&decl), "header is missing `{decl}`");
@@ -588,7 +695,7 @@ mod tests {
             .collect();
 
         // Everything the shader can have is registered, plus the declared params.
-        assert_eq!(registered.len(), BUILTIN.len() + INTERNAL.len() + 2);
+        assert_eq!(registered.len(), BUILTIN.len() + INTERNAL.len() + 1 + 2);
         assert!(registered.contains(&"glow".to_owned()));
         assert!(registered.contains(&"missing".to_owned()));
 

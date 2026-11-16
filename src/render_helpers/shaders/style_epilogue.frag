@@ -1,7 +1,8 @@
 
 
 void main() {
-    vec2 px = niri_v_coords * niri_size / niri_scale - niri_origin;
+    // The element's source is its size in logical pixels, so these are logical pixels.
+    vec2 px = niri_v_coords - niri_origin;
     vec4 color = style_color(px, u_size);
 
     color = color * niri_alpha;

@@ -94,6 +94,15 @@ impl FramebufferEffect {
 }
 
 impl FramebufferEffectElement {
+    /// Returns the unblurred framebuffer contents captured by the last `capture_framebuffer()`.
+    ///
+    /// This only works for elements without blur.
+    pub fn captured_texture(cache: &UserDataMap) -> Option<GlesTexture> {
+        let inner = cache.get::<RefCell<Inner>>()?;
+        let inner = inner.borrow();
+        inner.intermediate.clone()
+    }
+
     fn compute_uniforms(
         &self,
         crop: Rectangle<f64, Logical>,

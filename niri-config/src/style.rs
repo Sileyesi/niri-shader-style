@@ -71,6 +71,8 @@ pub struct ShaderFile {
     pub key: u64,
     /// Whether the shader uses `u_time`, so it needs to be redrawn continuously.
     pub animated: bool,
+    /// Whether the shader samples what is behind the window, with `u_backdrop`.
+    pub uses_backdrop: bool,
 }
 
 /// Style with all matching window rules applied.
@@ -191,6 +193,7 @@ impl ShaderFile {
         let key = hasher.finish();
 
         let animated = source.as_deref().is_ok_and(is_animated);
+        let uses_backdrop = source.as_deref().is_ok_and(uses_backdrop);
 
         Self {
             path,
@@ -198,6 +201,7 @@ impl ShaderFile {
             hash,
             key,
             animated,
+            uses_backdrop,
         }
     }
 
@@ -331,6 +335,11 @@ pub fn is_animated(source: &str) -> bool {
     })
 }
 
+/// Returns whether the shader refers to `u_backdrop` or `u_backdrop_at()`.
+pub fn uses_backdrop(source: &str) -> bool {
+    strip_comments(source).contains("u_backdrop")
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -402,6 +411,14 @@ mod tests {
         assert!(!is_animated("/* u_time */ float t = 1.0;"));
         assert!(!is_animated("float u_time_scale = 1.0; float my_u_time;"));
         assert!(!is_animated(""));
+    }
+
+    #[test]
+    fn detects_backdrop_use() {
+        assert!(uses_backdrop("vec4 c = u_backdrop_at(px);"));
+        assert!(uses_backdrop("texture2D(u_backdrop, uv)"));
+        assert!(!uses_backdrop("// u_backdrop_at is not used\nvec4 c;"));
+        assert!(!uses_backdrop(""));
     }
 
     #[test]
