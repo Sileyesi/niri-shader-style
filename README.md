@@ -1,3 +1,5 @@
+> **This is a fork with per-window shader styles.** A window rule can point at a GLSL fragment shader that draws the window's background, border, glow or glass, and edits apply live. See [SHADER_STYLE.md](SHADER_STYLE.md) ([українською](SHADER_STYLE.uk.md)). Everything below is the upstream niri README.
+
 <h1 align="center"><img alt="niri" src="https://github.com/user-attachments/assets/07d05cd0-d5dc-4a28-9a35-51bae8f119a0"></h1>
 <p align="center">A scrollable-tiling Wayland compositor.</p>
 <p align="center">
