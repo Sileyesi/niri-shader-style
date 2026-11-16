@@ -1052,7 +1052,7 @@ window-rule {
 
 The shader defines `vec4 style_color(vec2 px, vec2 size)`, which returns the *premultiplied* color of the pixel at `px`.
 `px` is in logical pixels from the window's top-left corner (negative outside of the window), and `size` is the window size.
-See [the example shaders](./examples/shaders/): `gradient_border.frag`, `neon.frag`, `glass.frag` and `liquid_glass.frag`.
+See [the example shaders](./examples/shaders/): `gradient_border.frag`, `neon.frag` and `glass.frag`.
 
 Uniforms available to the shader:
 
@@ -1070,7 +1070,6 @@ Uniforms available to the shader:
 
 A shader that uses `u_backdrop_at()` makes niri capture the pixels behind the window every frame it is redrawn, like the non-xray [blur](./Window-Effects.md) does.
 The backdrop isn't available during window opening and closing animations, so such a shader isn't drawn then.
-See `liquid_glass.frag` for an example.
 
 Parameters not set in the config are `0`.
 Declare each parameter you use as `uniform float name;` in the shader.
