@@ -1075,8 +1075,9 @@ See `liquid_glass.frag` for an example.
 Parameters not set in the config are `0`.
 Declare each parameter you use as `uniform float name;` in the shader.
 
+niri watches the shader files along with the config, so edits apply within a moment, without restarting niri.
 If the file is missing, or the shader fails to compile, niri logs an error and draws the window with the default decorations.
-A shader that is edited and fails to compile keeps the previous working version.
+A shader that is edited and fails to compile keeps the previous working version until you fix it.
 Compile errors are logged with line numbers shifted by the number of lines niri puts before your code, which the message states.
 
 > [!WARNING]
