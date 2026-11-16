@@ -4,7 +4,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::window_rule::{Match, WindowRule};
 use niri_config::{
     BackgroundEffect, BlockOutFrom, BorderRule, CornerRadius, FloatingPosition, PresetSize,
-    ResolvedPopupsRules, ShadowRule, TabIndicatorRule,
+    ResolvedPopupsRules, ShadowRule, Style, TabIndicatorRule,
 };
 use niri_ipc::ColumnDisplay;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
@@ -125,6 +125,9 @@ pub struct ResolvedWindowRules {
 
     /// Rules for this window's popups.
     pub popups: ResolvedPopupsRules,
+
+    /// Shader style, if any of the matching rules have one.
+    pub style: Option<Style>,
 }
 
 impl<'a> WindowRef<'a> {
@@ -308,6 +311,19 @@ impl ResolvedWindowRules {
                     .merge_with(&rule.background_effect);
 
                 resolved.popups.merge_with(&rule.popups);
+
+                if let Some(style) = &rule.style {
+                    resolved
+                        .style
+                        .get_or_insert_with(Style::default)
+                        .merge_with(style);
+
+                    // Style corner radius is the same as the geometry corner radius, but applies
+                    // after the other rule properties.
+                    if let Some(x) = style.corner_radius {
+                        resolved.geometry_corner_radius = Some(x);
+                    }
+                }
             }
 
             resolved.open_on_output = open_on_output.map(|x| x.to_owned());
