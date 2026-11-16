@@ -1017,6 +1017,67 @@ For example, GTK 4 pop-ups with pointing arrows (`has-arrow=true` property) are
 
 These pop-ups with custom shapes will need the app to implement the [ext-background-effect protocol](https://wayland.app/protocols/ext-background-effect-v1) to work properly.
 
+#### `style`
+
+<sup>Since: next release</sup>
+
+Draw the window's decorations with your own fragment shader, with a per-window palette and numeric parameters.
+The shader paints the area around and behind the window: background, border, glow and shadow, in one pass.
+It replaces the border, focus ring and shadow of this window, if it compiles.
+
+- `palette`: four colors, `primary`, `secondary`, `accent` and `background`, available to the shader.
+Unset colors default to the niri focus ring colors (active, inactive, urgent) and a transparent background.
+- `shader`: path to a `.frag` file.
+`~` is expanded and relative paths are relative to the config file.
+- `corner-radius`: same as `geometry-corner-radius`; add `clip-to-geometry true` to clip the window to it.
+- `margin`: how far around the window the shader can draw, in logical pixels.
+Default is 32.
+- `param`: a number, set as a `uniform float` of the same name in the shader.
+
+```kdl
+window-rule {
+    match app-id="firefox"
+
+    clip-to-geometry true
+
+    style {
+        palette { primary "#89b4fa"; secondary "#cba6f7"; accent "#f38ba8"; background "#1e1e2e"; }
+        shader "~/.config/niri/shaders/gradient_border.frag"
+        corner-radius 14
+        param "width" 3.0
+        param "shadow" 0.4
+    }
+}
+```
+
+The shader defines `vec4 style_color(vec2 px, vec2 size)`, which returns the *premultiplied* color of the pixel at `px`.
+`px` is in logical pixels from the window's top-left corner (negative outside of the window), and `size` is the window size.
+See [the example shaders](./examples/shaders/): `gradient_border.frag`, `neon.frag` and `glass.frag`.
+
+Uniforms available to the shader:
+
+| Uniform | |
+|---|---|
+| `float u_time` | Seconds, wraps every hour. A shader that uses it is redrawn continuously while it's on screen. |
+| `vec2 u_size` | Window size. |
+| `vec2 u_pos` | Window position in the workspace view. |
+| `float u_focused` | `1.0` for the active window, `0.0` otherwise. |
+| `vec4 u_radius` | Corner radii: top-left, top-right, bottom-right, bottom-left. |
+| `u_palette(int i)` | Palette color, `U_PRIMARY`, `U_SECONDARY`, `U_ACCENT` or `U_BACKGROUND`. Straight alpha. |
+| `float u_window_sdf(vec2 px)` | Signed distance to the window's rounded edge: negative inside, positive outside. |
+| `vec4 u_premul(vec4)`, `vec4 u_over(vec4 top, vec4 bottom)` | Premultiply, and alpha-composite premultiplied colors. |
+
+Parameters not set in the config are `0`.
+Declare each parameter you use as `uniform float name;` in the shader.
+
+If the file is missing, or the shader fails to compile, niri logs an error and draws the window with the default decorations.
+A shader that is edited and fails to compile keeps the previous working version.
+Compile errors are logged with line numbers shifted by the number of lines niri puts before your code, which the message states.
+
+> [!WARNING]
+>
+> Style shaders do not have a backwards compatibility guarantee.
+
 #### Size Overrides
 
 You can amend the window's minimum and maximum size in logical pixels.
