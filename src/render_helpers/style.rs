@@ -395,6 +395,13 @@ impl StyleRenderElement {
         self.inner = self.inner.with_location(location);
         self
     }
+
+    /// Multiplies the alpha of the element by `alpha`.
+    pub fn with_alpha_scaled(mut self, alpha: f32) -> Self {
+        let alpha = self.inner.alpha() * alpha;
+        self.inner = self.inner.with_alpha(alpha);
+        self
+    }
 }
 
 impl Default for StyleRenderElement {

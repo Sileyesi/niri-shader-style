@@ -1125,6 +1125,9 @@ impl<W: LayoutElement> Tile<W> {
         location: Point<f64, Logical>,
         mut xray_pos: XrayPos,
         focus_ring: bool,
+        // `Some` if the style is drawn separately, with whether it's usable. This is for when the
+        // tile is drawn to an offscreen buffer, where a style that needs the backdrop can't work.
+        external_style: Option<bool>,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
         let _span = tracy_client::span!("Tile::render_inner");
@@ -1378,16 +1381,10 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         // The style shader replaces the border, focus ring and shadow, if it's usable.
-        let mut style_pushed = false;
-        if let (Some(elem), Some(style)) = (&self.style, &rules.style) {
-            if style::ensure_program(ctx.renderer.as_gles_renderer(), style) {
-                let margin = elem.margin();
-                let loc = window_render_loc - Point::from((margin, margin));
-                push(elem.clone().with_location(loc).into());
-                style_pushed = true;
-            }
-            self.style_failed.set(!style_pushed);
-        }
+        let style_pushed = match external_style {
+            Some(usable) => usable,
+            None => self.render_style(ctx.renderer, location, 1., &mut |elem| push(elem.into())),
+        };
 
         if let Some(width) = self.visual_border_width().filter(|_| !style_pushed) {
             self.border.render(
@@ -1424,6 +1421,33 @@ impl<W: LayoutElement> Tile<W> {
         );
     }
 
+    /// Renders the style around the window, and returns whether it's usable.
+    ///
+    /// If it is, it replaces the border, focus ring and shadow. `location` is that of the tile,
+    /// including the bobbing offset.
+    fn render_style<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        location: Point<f64, Logical>,
+        alpha: f32,
+        push: &mut dyn FnMut(StyleRenderElement),
+    ) -> bool {
+        let (Some(elem), Some(style)) = (&self.style, &self.window.rules().style) else {
+            return false;
+        };
+
+        let usable = style::ensure_program(renderer.as_gles_renderer(), style);
+        self.style_failed.set(!usable);
+
+        if usable {
+            let margin = elem.margin();
+            let loc = location + self.window_loc() - Point::from((margin, margin));
+            push(elem.clone().with_location(loc).with_alpha_scaled(alpha));
+        }
+
+        usable
+    }
+
     pub fn render<R: NiriRenderer>(
         &self,
         mut ctx: RenderCtx<R>,
@@ -1452,6 +1476,7 @@ impl<W: LayoutElement> Tile<W> {
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
+                None,
                 &mut |elem| elements.push(elem),
             );
             match open.render(
@@ -1473,12 +1498,25 @@ impl<W: LayoutElement> Tile<W> {
             }
         } else if let Some(alpha) = &self.alpha_animation {
             let mut ctx = ctx.as_gles();
+
+            // A style that samples the backdrop can't be drawn into the offscreen buffer, so draw
+            // it separately, behind it. This keeps the style working while the tile is being
+            // dragged with the pointer.
+            let mut style_elems = Vec::new();
+            let style_usable = self.render_style(
+                ctx.renderer,
+                location + self.bob_offset(),
+                tile_alpha,
+                &mut |elem| style_elems.push(elem),
+            );
+
             let mut elements = Vec::new();
             self.render_inner(
                 ctx.r(),
                 Point::new(0., 0.),
                 xray_pos,
                 focus_ring,
+                Some(style_usable),
                 &mut |elem| elements.push(elem),
             );
             match alpha.offscreen.render(ctx.renderer, scale, &elements) {
@@ -1488,6 +1526,9 @@ impl<W: LayoutElement> Tile<W> {
 
                     self.window().set_offscreen_data(Some(data));
                     push(elem.into());
+                    for elem in style_elems {
+                        push(elem.into());
+                    }
                     pushed = true;
                 }
                 Err(err) => {
@@ -1497,7 +1538,9 @@ impl<W: LayoutElement> Tile<W> {
         }
 
         if !pushed {
-            self.render_inner(ctx, location, xray_pos, focus_ring, &mut |elem| push(elem));
+            self.render_inner(ctx, location, xray_pos, focus_ring, None, &mut |elem| {
+                push(elem)
+            });
         }
     }
 
