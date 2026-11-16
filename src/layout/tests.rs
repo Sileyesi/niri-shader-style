@@ -2532,6 +2532,52 @@ fn fixed_height_takes_max_non_auto_into_account() {
 }
 
 #[test]
+fn animated_style_of_dragged_floating_window_keeps_redrawing() {
+    // A style shader that uses u_time needs redraws also while its window is dragged and the
+    // pointer is still, so that the water keeps moving.
+    let shader = niri_config::ShaderFile::new(
+        "animated.frag".into(),
+        Ok("vec4 style_color(vec2 px, vec2 size) { return vec4(u_time); }".into()),
+    );
+    assert!(shader.animated);
+
+    let rules = ResolvedWindowRules {
+        style: Some(niri_config::Style {
+            shader: Some(shader),
+            ..niri_config::Style::default()
+        }),
+        ..ResolvedWindowRules::default()
+    };
+    let mut params = TestWindowParams::new(0);
+    params.is_floating = true;
+    params.rules = Some(rules);
+
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddWindow { params },
+        Op::InteractiveMoveBegin {
+            window: 0,
+            output_idx: 1,
+            px: 10.,
+            py: 10.,
+        },
+        Op::InteractiveMoveUpdate {
+            window: 0,
+            dx: 100.,
+            dy: 20.,
+            output_idx: 1,
+            px: 110.,
+            py: 30.,
+        },
+        // Let the tile's own animations finish, like when the pointer is held still.
+        Op::AdvanceAnimations { msec_delta: 2000 },
+    ]);
+
+    layout.update_render_elements(None);
+    assert!(layout.are_animations_ongoing(None));
+}
+
+#[test]
 fn start_interactive_move_then_remove_window() {
     let ops = [
         Op::AddOutput(1),

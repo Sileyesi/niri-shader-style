@@ -1189,8 +1189,9 @@ impl<W: LayoutElement> Tile<W> {
         location: Point<f64, Logical>,
         mut xray_pos: XrayPos,
         focus_ring: bool,
-        // `Some` if the style is drawn separately, with whether it's usable. This is for when the
-        // tile is drawn to an offscreen buffer, where a style that needs the backdrop can't work.
+        // `Some` if the style and the background effect are drawn separately, with whether the
+        // style is usable. This is for when the tile is drawn to an offscreen buffer, where things
+        // that need the framebuffer behind the tile can't work.
         external_style: Option<bool>,
         push: &mut dyn FnMut(TileRenderElement<R>),
     ) {
@@ -1472,16 +1473,60 @@ impl<W: LayoutElement> Tile<W> {
                 .render(ctx.renderer, location, &mut |elem| push(elem.into()));
         }
 
-        let surface_anim_scale = animated_window_size / window_size;
+        if external_style.is_none() {
+            let surface_anim_scale = animated_window_size / window_size;
+            self.window.render_background_effect(
+                ctx.as_gles(),
+                area,
+                self.scale,
+                clip_to_geometry,
+                surface_anim_scale,
+                radius,
+                xray_pos,
+                &mut |elem| push(elem.into()),
+            );
+        }
+    }
+
+    /// Renders the background effect of the window, like `render_inner()` does.
+    ///
+    /// This is for drawing it outside of the offscreen buffer that the rest of the tile is drawn
+    /// to, since blur needs the framebuffer behind the tile.
+    fn render_background(
+        &self,
+        ctx: RenderCtx<GlesRenderer>,
+        location: Point<f64, Logical>,
+        xray_pos: XrayPos,
+        push: &mut dyn FnMut(BackgroundEffectElement),
+    ) {
+        let fullscreen_progress = self.fullscreen_progress();
+        let expanded_progress = self.expanded_progress();
+
+        let bob_offset = self.bob_offset();
+        let window_loc = self.window_loc();
+        let window_size = self.window_size();
+        let animated_window_size = self.animated_window_size();
+
+        let location = location + bob_offset;
+        let xray_pos = xray_pos.offset(bob_offset).offset(window_loc);
+        let area = Rectangle::new(location + window_loc, animated_window_size);
+
+        let clip_to_geometry =
+            fullscreen_progress < 1. && self.window.rules().clip_to_geometry == Some(true);
+        let radius = self
+            .window
+            .geometry_corner_radius()
+            .scaled_by(1. - expanded_progress as f32);
+
         self.window.render_background_effect(
-            ctx.as_gles(),
+            ctx,
             area,
             self.scale,
             clip_to_geometry,
-            surface_anim_scale,
+            animated_window_size / window_size,
             radius,
             xray_pos,
-            &mut |elem| push(elem.into()),
+            push,
         );
     }
 
@@ -1593,6 +1638,11 @@ impl<W: LayoutElement> Tile<W> {
                     for elem in style_elems {
                         push(elem.into());
                     }
+
+                    // The background effect goes behind the style.
+                    self.render_background(ctx.r(), location, xray_pos, &mut |elem| {
+                        push(elem.into())
+                    });
                     pushed = true;
                 }
                 Err(err) => {

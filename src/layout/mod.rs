@@ -2739,7 +2739,8 @@ impl<W: LayoutElement> Layout<W> {
 
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if output.is_none_or(|output| *output == move_.output) {
-                if move_.tile.are_animations_ongoing() {
+                if move_.tile.are_animations_ongoing() || move_.tile.are_style_animations_ongoing()
+                {
                     return true;
                 }
 
