@@ -24,6 +24,8 @@ pub struct StyleRule {
     pub shader: Option<ShaderFile>,
     #[knuffel(child)]
     pub corner_radius: Option<CornerRadius>,
+    #[knuffel(child, unwrap(argument))]
+    pub margin: Option<FloatOrInt<0, 512>>,
     #[knuffel(children(name = "param"))]
     pub params: Vec<StyleParam>,
 }
@@ -63,8 +65,12 @@ pub struct ShaderFile {
     pub path: PathBuf,
     /// Shader source, or a message about why it couldn't be read.
     pub source: Result<Arc<str>, String>,
-    /// Hash of the source; together with the path it identifies a compiled program.
+    /// Hash of the source, to tell when the file changes.
     pub hash: u64,
+    /// Hash of the path, to identify the compiled program of this shader.
+    pub key: u64,
+    /// Whether the shader uses `u_time`, so it needs to be redrawn continuously.
+    pub animated: bool,
 }
 
 /// Style with all matching window rules applied.
@@ -72,6 +78,8 @@ pub struct ShaderFile {
 pub struct Style {
     pub palette: Palette,
     pub shader: Option<ShaderFile>,
+    /// How far around the window geometry the shader draws, in logical pixels.
+    pub margin: f64,
     pub params: BTreeMap<String, f64>,
 }
 
@@ -86,6 +94,9 @@ pub struct Palette {
     pub accent: Color,
     pub background: Color,
 }
+
+/// Default distance around the window geometry that the shader can draw to.
+pub const DEFAULT_MARGIN: f64 = 32.;
 
 impl Default for Palette {
     fn default() -> Self {
@@ -103,6 +114,7 @@ impl Default for Style {
         Self {
             palette: Palette::default(),
             shader: None,
+            margin: DEFAULT_MARGIN,
             params: BTreeMap::new(),
         }
     }
@@ -126,6 +138,10 @@ impl MergeWith<StyleRule> for Style {
 
         if let Some(x) = &part.shader {
             self.shader = Some(x.clone());
+        }
+
+        if let Some(x) = part.margin {
+            self.margin = x.0;
         }
 
         for param in &part.params {
@@ -168,11 +184,20 @@ impl ShaderFile {
             Ok(text) => text.hash(&mut hasher),
             Err(err) => err.hash(&mut hasher),
         }
+        let hash = hasher.finish();
+
+        let mut hasher = DefaultHasher::new();
+        path.hash(&mut hasher);
+        let key = hasher.finish();
+
+        let animated = source.as_deref().is_ok_and(is_animated);
 
         Self {
             path,
             source,
-            hash: hasher.finish(),
+            hash,
+            key,
+            animated,
         }
     }
 
@@ -264,6 +289,48 @@ where
     }
 }
 
+/// Removes `//` and `/* */` comments from GLSL source.
+pub fn strip_comments(source: &str) -> String {
+    let mut rv = String::with_capacity(source.len());
+    let mut chars = source.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('/', Some('/')) => {
+                // Keep the newline.
+                while chars.next_if(|&c| c != '\n').is_some() {}
+            }
+            ('/', Some('*')) => {
+                chars.next();
+                let mut prev = ' ';
+                for c in chars.by_ref() {
+                    if prev == '*' && c == '/' {
+                        break;
+                    }
+                    prev = c;
+                }
+                // A comment separates tokens.
+                rv.push(' ');
+            }
+            _ => rv.push(c),
+        }
+    }
+
+    rv
+}
+
+/// Returns whether the shader output changes with time, so it needs redraws.
+pub fn is_animated(source: &str) -> bool {
+    let source = strip_comments(source);
+    let is_identifier_char = |c: char| c.is_ascii_alphanumeric() || c == '_';
+
+    source.match_indices("u_time").any(|(idx, name)| {
+        let before = source[..idx].chars().next_back();
+        let after = source[idx + name.len()..].chars().next();
+        !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -325,6 +392,27 @@ mod tests {
         assert_eq!(style.params[0].name.0, "blur_radius");
         assert_eq!(style.params[0].value.0, 12.);
         assert_eq!(style.params[1].value.0, 1.);
+    }
+
+    #[test]
+    fn detects_animated_shaders() {
+        assert!(is_animated("float t = u_time * 2.0;"));
+        assert!(is_animated("sin(u_time)"));
+        assert!(!is_animated("// u_time is not used\nfloat t = 1.0;"));
+        assert!(!is_animated("/* u_time */ float t = 1.0;"));
+        assert!(!is_animated("float u_time_scale = 1.0; float my_u_time;"));
+        assert!(!is_animated(""));
+    }
+
+    #[test]
+    fn margin_defaults_and_merges() {
+        let rule = parse_rule(r#"window-rule { style { margin 48; }; }"#).unwrap();
+        let mut style = Style::default();
+        assert_eq!(style.margin, DEFAULT_MARGIN);
+        style.merge_with(style_of(&rule));
+        assert_eq!(style.margin, 48.);
+
+        assert!(parse_rule(r#"window-rule { style { margin -1; }; }"#).is_err());
     }
 
     #[test]
@@ -407,6 +495,8 @@ mod tests {
         assert_eq!(a.source.as_deref(), Ok("// a"));
         assert_eq!(b.source.as_deref(), Ok("// b"));
         assert_ne!(a.hash, b.hash);
+        assert_ne!(a.key, b.key);
+        assert!(!a.animated);
         assert_eq!(res.includes, [a.path, b.path]);
     }
 
